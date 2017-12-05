@@ -23,6 +23,7 @@
   "author": "The Chromium Authors",
   "license": "Apache-2.0",
   "dependencies": {
+    "chokidar": "^1.7.0",
     "debug": "^2.6.8",
     "extract-zip": "^1.6.5",
     "https-proxy-agent": "^2.1.0",
