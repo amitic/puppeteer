@@ -15,23 +15,25 @@
  */
 
 const os = require('os');
-const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const extract = require('extract-zip');
 const util = require('util');
 const URL = require('url');
 const removeRecursive = require('rimraf');
+// @ts-ignore
 const ProxyAgent = require('https-proxy-agent');
+// @ts-ignore
 const getProxyForUrl = require('proxy-from-env').getProxyForUrl;
 
 const DOWNLOADS_FOLDER = path.join(__dirname, '..', '.local-chromium');
+const DEFAULT_DOWNLOAD_HOST = 'https://storage.googleapis.com';
 
 const downloadURLs = {
-  linux: 'https://storage.googleapis.com/chromium-browser-snapshots/Linux_x64/%d/chrome-linux.zip',
-  mac: 'https://storage.googleapis.com/chromium-browser-snapshots/Mac/%d/chrome-mac.zip',
-  win32: 'https://storage.googleapis.com/chromium-browser-snapshots/Win/%d/chrome-win32.zip',
-  win64: 'https://storage.googleapis.com/chromium-browser-snapshots/Win_x64/%d/chrome-win32.zip',
+  linux: '%s/chromium-browser-snapshots/Linux_x64/%d/chrome-linux.zip',
+  mac: '%s/chromium-browser-snapshots/Mac/%d/chrome-mac.zip',
+  win32: '%s/chromium-browser-snapshots/Win/%d/chrome-win32.zip',
+  win64: '%s/chromium-browser-snapshots/Win_x64/%d/chrome-win32.zip',
 };
 
 module.exports = {
@@ -64,31 +66,31 @@ module.exports = {
   canDownloadRevision: function(platform, revision) {
     console.assert(downloadURLs[platform], 'Unknown platform: ' + platform);
 
-    const options = requestOptions(util.format(downloadURLs[platform], revision), 'HEAD');
+    const url = util.format(downloadURLs[platform], DEFAULT_DOWNLOAD_HOST, revision);
 
     let resolve;
     const promise = new Promise(x => resolve = x);
-    const request = https.request(options, response => {
+    const request = httpRequest(url, 'HEAD', response => {
       resolve(response.statusCode === 200);
     });
     request.on('error', error => {
       console.error(error);
       resolve(false);
     });
-    request.end();
     return promise;
   },
 
   /**
    * @param {string} platform
    * @param {string} revision
+   * @param {string} [downloadHost=DEFAULT_DOWNLOAD_HOST]
    * @param {?function(number, number)} progressCallback
    * @return {!Promise}
    */
-  downloadRevision: function(platform, revision, progressCallback) {
+  downloadRevision: function(platform, revision, downloadHost = DEFAULT_DOWNLOAD_HOST, progressCallback) {
     let url = downloadURLs[platform];
     console.assert(url, `Unsupported platform: ${platform}`);
-    url = util.format(url, revision);
+    url = util.format(url, downloadHost, revision);
     const zipPath = path.join(DOWNLOADS_FOLDER, `download-${platform}-${revision}.zip`);
     const folderPath = getFolderPath(platform, revision);
     if (fs.existsSync(folderPath))
@@ -131,7 +133,7 @@ module.exports = {
   /**
    * @param {string} platform
    * @param {string} revision
-   * @return {!{folderPath: string, executablePath: string, downloaded: boolean, url: string}}
+   * @return {!{folderPath: string, executablePath: string, downloaded: boolean}}
    */
   revisionInfo: function(platform, revision) {
     console.assert(downloadURLs[platform], `Unsupported platform: ${platform}`);
@@ -144,12 +146,11 @@ module.exports = {
     else if (platform === 'win32' || platform === 'win64')
       executablePath = path.join(folderPath, 'chrome-win32', 'chrome.exe');
     else
-      throw 'Unsupported platfrom: ' + platfrom;
+      throw 'Unsupported platform: ' + platform;
     return {
       executablePath,
       folderPath,
-      downloaded: fs.existsSync(folderPath),
-      url: util.format(downloadURLs[platform], revision)
+      downloaded: fs.existsSync(folderPath)
     };
   },
 };
@@ -189,8 +190,7 @@ function downloadFile(url, destinationPath, progressCallback) {
 
   const promise = new Promise((x, y) => { fulfill = x; reject = y; });
 
-  const options = requestOptions(url);
-  const request = https.get(options, response => {
+  const request = httpRequest(url, 'GET', response => {
     if (response.statusCode !== 200) {
       const error = new Error(`Download failed: server returned code ${response.statusCode}. URL: ${url}`);
       // consume response data to free up memory
@@ -202,7 +202,7 @@ function downloadFile(url, destinationPath, progressCallback) {
     file.on('finish', () => fulfill());
     file.on('error', error => reject(error));
     response.pipe(file);
-    const totalBytes = parseInt(response.headers['content-length'], 10);
+    const totalBytes = parseInt(/** @type {string} */ (response.headers['content-length']), 10);
     if (progressCallback)
       response.on('data', onData.bind(null, totalBytes));
   });
@@ -223,17 +223,23 @@ function extractZip(zipPath, folderPath) {
   return new Promise(fulfill => extract(zipPath, {dir: folderPath}, fulfill));
 }
 
-function requestOptions(url, method = 'GET') {
-  const result = URL.parse(url);
-  result.method = method;
+function httpRequest(url, method, response) {
+  /** @type {Object} */
+  const options = URL.parse(url);
+  options.method = method;
 
   const proxyURL = getProxyForUrl(url);
   if (proxyURL) {
+    /** @type {Object} */
     const parsedProxyURL = URL.parse(proxyURL);
     parsedProxyURL.secureProxy = parsedProxyURL.protocol === 'https:';
 
-    result.agent = new ProxyAgent(parsedProxyURL);
+    options.agent = new ProxyAgent(parsedProxyURL);
+    options.rejectUnauthorized = false;
   }
 
-  return result;
+  const driver = options.protocol === 'https:' ? 'https' : 'http';
+  const request = require(driver).request(options, response);
+  request.end();
+  return request;
 }

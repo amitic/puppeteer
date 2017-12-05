@@ -28,15 +28,16 @@ const EXCLUDE_CLASSES = new Set([
   'Multimap',
   'NavigatorWatcher',
   'NetworkManager',
-  'ProxyStream',
   'Session',
   'TaskQueue',
   'WaitTask',
 ]);
 
 const EXCLUDE_METHODS = new Set([
+  'Browser.create',
   'Headers.fromPayload',
   'Page.create',
+  'JSHandle.toString',
 ]);
 
 /**
